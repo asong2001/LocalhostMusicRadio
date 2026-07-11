@@ -1,0 +1,17 @@
+services:
+  radio:
+    build: .
+    container_name: music-radio
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    volumes:
+      - ${RADIO_AUDIO_HOST_DIR:-./audio}:/radio/audio:ro
+      - ./public:/radio/public
+    environment:
+      RADIO_MODE: loop
+      RADIO_AUDIO_BITRATE: 128k
+      RADIO_HLS_TIME: 6
+      RADIO_HLS_LIST_SIZE: 8
+      RADIO_WEB_PORT: 8001
