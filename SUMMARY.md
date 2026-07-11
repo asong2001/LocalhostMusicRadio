@@ -16,6 +16,12 @@ MusicRadio 是一个本地音乐电台服务，用于读取 NAS 或 Linux 主机
 http://<host-ip>:8000/hls/radio.m3u8
 ```
 
+兼容 MP3 HTTP 直流：
+
+```text
+http://<host-ip>:8000/stream.mp3
+```
+
 Web 控制台：
 
 ```text
@@ -30,6 +36,7 @@ http://<host-ip>:8001/
 - 支持顺序循环播放和随机播放。
 - 生成 HLS 直播文件：`radio.m3u8` 和 `.ts` 分片。
 - 通过 HTTP 暴露 HLS 播放地址。
+- 通过 HTTP 暴露连续 MP3 直播流，适合不稳定支持 HLS/AAC 的设备。
 - 提供 Web 控制台，默认端口 `8001`。
 - 控制台支持查看运行状态、当前曲目、队列数量、错误信息和直播地址。
 - 控制台支持跳过当前曲目。

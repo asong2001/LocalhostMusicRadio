@@ -16,6 +16,7 @@ class Settings:
     mode: str
     ffmpeg_bin: str
     audio_bitrate: str
+    mp3_bitrate: str
     sample_rate: int
     channels: int
     hls_time: int
@@ -64,6 +65,7 @@ def load_settings(overrides: SettingsOverrides | None = None) -> Settings:
         mode=(overrides.mode or os.getenv("RADIO_MODE", "loop")).lower(),
         ffmpeg_bin=overrides.ffmpeg_bin or os.getenv("RADIO_FFMPEG_BIN", "ffmpeg"),
         audio_bitrate=os.getenv("RADIO_AUDIO_BITRATE", "128k"),
+        mp3_bitrate=os.getenv("RADIO_MP3_BITRATE", "128k"),
         sample_rate=int(os.getenv("RADIO_SAMPLE_RATE", "44100")),
         channels=int(os.getenv("RADIO_CHANNELS", "2")),
         hls_time=int(os.getenv("RADIO_HLS_TIME", "6")),

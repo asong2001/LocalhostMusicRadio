@@ -8,6 +8,12 @@ MusicRadio 是一个面向 Linux 和 Docker 的本地音乐电台服务。它会
 http://<host-ip>:8000/hls/radio.m3u8
 ```
 
+兼容 MP3 HTTP 直流：
+
+```text
+http://<host-ip>:8000/stream.mp3
+```
+
 Web 控制台：
 
 ```text
@@ -20,6 +26,7 @@ http://<host-ip>:8001/
 - 支持循环播放和随机播放。
 - 使用 FFmpeg 解码不同音频格式，并统一编码为 AAC HLS。
 - 暴露 HLS 静态文件。
+- 暴露 MP3 HTTP 直流，默认地址 `/stream.mp3`。
 - 暴露 Web 控制台，默认端口 `8001`。
 - Web 控制台支持修改扫描目录，新目录必须已经存在且服务进程可读。
 - 提供简单 API：
@@ -176,6 +183,7 @@ RADIO_PORT=8000
 RADIO_WEB_PORT=8001
 RADIO_MODE=loop
 RADIO_AUDIO_BITRATE=128k
+RADIO_MP3_BITRATE=128k
 RADIO_HLS_TIME=6
 RADIO_HLS_LIST_SIZE=8
 ```
@@ -204,6 +212,12 @@ shuffle
 
 ```bash
 curl http://localhost:8000/api/status
+```
+
+MP3 HTTP 直流：
+
+```bash
+curl -I http://localhost:8000/stream.mp3
 ```
 
 跳过当前曲目：

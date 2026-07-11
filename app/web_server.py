@@ -24,6 +24,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             payload = self.player.snapshot()
             payload["stream_url"] = self._stream_url()
+            payload["mp3_stream_url"] = self._mp3_stream_url()
             payload["web_port"] = self.settings.web_port
             self._send_json(payload)
             return
@@ -100,6 +101,11 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         host_header = self.headers.get("Host", "")
         hostname = host_header.split(":", 1)[0] or "localhost"
         return f"http://{hostname}:{self.settings.port}/hls/radio.m3u8"
+
+    def _mp3_stream_url(self) -> str:
+        host_header = self.headers.get("Host", "")
+        hostname = host_header.split(":", 1)[0] or "localhost"
+        return f"http://{hostname}:{self.settings.port}/stream.mp3"
 
     def _render_index(self) -> str:
         title = "MusicRadio Control"
@@ -337,7 +343,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
       <section>
         <h2>直播地址</h2>
+        <label>HLS</label>
         <code id="streamUrl">-</code>
+        <label>MP3 HTTP</label>
+        <code id="mp3StreamUrl">-</code>
         <audio id="audioPlayer" controls preload="none"></audio>
         <div class="actions">
           <a id="openStream" class="button" href="#" target="_blank" rel="noreferrer">打开流</a>
@@ -368,6 +377,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
       audioDirInput: document.getElementById("audioDirInput"),
       lastError: document.getElementById("lastError"),
       streamUrl: document.getElementById("streamUrl"),
+      mp3StreamUrl: document.getElementById("mp3StreamUrl"),
       openStream: document.getElementById("openStream"),
       audioPlayer: document.getElementById("audioPlayer"),
       toast: document.getElementById("toast"),
@@ -406,9 +416,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         }}
         elements.lastError.textContent = data.last_error || "-";
         elements.streamUrl.textContent = data.stream_url || "-";
-        elements.openStream.href = data.stream_url || "#";
-        if (data.stream_url && elements.audioPlayer.src !== data.stream_url) {{
-          elements.audioPlayer.src = data.stream_url;
+        elements.mp3StreamUrl.textContent = data.mp3_stream_url || "-";
+        elements.openStream.href = data.mp3_stream_url || data.stream_url || "#";
+        if (data.mp3_stream_url && elements.audioPlayer.src !== data.mp3_stream_url) {{
+          elements.audioPlayer.src = data.mp3_stream_url;
         }}
       }} catch (error) {{
         elements.runningPill.textContent = "连接失败";
@@ -451,7 +462,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
     document.getElementById("rescanBtn").addEventListener("click", () => postAction("/api/rescan", "扫描"));
     document.getElementById("saveAudioDirBtn").addEventListener("click", saveAudioDir);
     document.getElementById("copyBtn").addEventListener("click", async () => {{
-      const url = elements.streamUrl.textContent;
+      const url = elements.mp3StreamUrl.textContent || elements.streamUrl.textContent;
       await navigator.clipboard.writeText(url);
       setToast("地址已复制");
     }});

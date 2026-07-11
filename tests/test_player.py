@@ -17,6 +17,7 @@ def make_settings(root: Path) -> Settings:
         mode="loop",
         ffmpeg_bin="ffmpeg",
         audio_bitrate="128k",
+        mp3_bitrate="128k",
         sample_rate=44100,
         channels=2,
         hls_time=6,
@@ -32,6 +33,13 @@ class PlayerTests(unittest.TestCase):
 
         self.assertIn("-re", command)
         self.assertLess(command.index("-re"), command.index("-i"))
+
+    def test_snapshot_includes_mp3_stream_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            player = RadioPlayer(make_settings(Path(temp_dir)))
+            snapshot = player.snapshot()
+
+        self.assertEqual(snapshot["mp3_stream"], "/stream.mp3")
 
     def test_set_audio_dir_updates_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

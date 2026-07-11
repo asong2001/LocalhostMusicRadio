@@ -5,6 +5,7 @@ import logging
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .player import RadioPlayer
 from .settings import Settings
@@ -20,10 +21,14 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(public_dir), **kwargs)
 
     def do_GET(self) -> None:
-        if self.path == "/api/status":
+        path = urlparse(self.path).path
+        if path == "/api/status":
             self._send_json(self.player.snapshot())
             return
-        if self.path == "/":
+        if path == "/stream.mp3":
+            self._send_mp3_stream()
+            return
+        if path == "/":
             self.path = "/hls/radio.m3u8"
         super().do_GET()
 
@@ -59,6 +64,24 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_mp3_stream(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Connection", "close")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("icy-name", "MusicRadio")
+        self.end_headers()
+
+        client = self.player.iter_mp3_stream()
+        try:
+            for chunk in client:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            client.close()
 
 
 def create_server(settings: Settings, player: RadioPlayer) -> ThreadingHTTPServer:

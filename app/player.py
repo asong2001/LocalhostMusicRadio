@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .mp3_stream import Mp3ClientIterator, Mp3Stream
 from .scanner import scan_audio_files
 from .settings import Settings
 
@@ -39,6 +40,7 @@ class RadioPlayer:
         self._thread: threading.Thread | None = None
         self._encoder: subprocess.Popen[bytes] | None = None
         self._decoder: subprocess.Popen[bytes] | None = None
+        self._mp3_stream = Mp3Stream(settings)
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -57,6 +59,7 @@ class RadioPlayer:
         self._skip_event.set()
         self._terminate_process(self._decoder)
         self._terminate_process(self._encoder)
+        self._mp3_stream.stop()
         if self._thread:
             self._thread.join(timeout=10)
 
@@ -76,6 +79,7 @@ class RadioPlayer:
 
         with self._lock:
             self.settings = replace(self.settings, audio_dir=resolved)
+            self._mp3_stream.update_settings(self.settings)
             self.state.queue_size = 0
             self.state.current_track = None
             self.state.last_error = None
@@ -95,8 +99,12 @@ class RadioPlayer:
                 "tracks_played": self.state.tracks_played,
                 "last_error": self.state.last_error,
                 "hls_playlist": self.state.hls_playlist,
+                "mp3_stream": "/stream.mp3",
                 "uptime_seconds": int(time.time() - self.state.started_at),
             }
+
+    def iter_mp3_stream(self) -> Mp3ClientIterator:
+        return self._mp3_stream.iter_client()
 
     def _run(self) -> None:
         with self._lock:
@@ -158,6 +166,7 @@ class RadioPlayer:
                 try:
                     self._encoder.stdin.write(chunk)
                     self._encoder.stdin.flush()
+                    self._mp3_stream.write_pcm(chunk)
                 except BrokenPipeError:
                     self._set_error("FFmpeg encoder pipe closed")
                     break
