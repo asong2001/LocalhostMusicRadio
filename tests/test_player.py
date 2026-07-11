@@ -34,6 +34,15 @@ class PlayerTests(unittest.TestCase):
         self.assertIn("-re", command)
         self.assertLess(command.index("-re"), command.index("-i"))
 
+    def test_encoder_uses_hls_compatibility_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            player = RadioPlayer(make_settings(Path(temp_dir)))
+            command = player._build_encoder_command()
+
+        self.assertEqual(command[command.index("-hls_time") + 1], "6")
+        self.assertEqual(command[command.index("-hls_list_size") + 1], "8")
+        self.assertEqual(command[command.index("-hls_allow_cache") + 1], "0")
+
     def test_snapshot_includes_mp3_stream_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             player = RadioPlayer(make_settings(Path(temp_dir)))

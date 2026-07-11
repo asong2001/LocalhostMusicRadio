@@ -17,6 +17,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.web_port, 9001)
         self.assertEqual(settings.mode, "shuffle")
 
+    def test_default_hls_settings_are_compatibility_friendly(self) -> None:
+        settings = load_settings()
+
+        self.assertEqual(settings.hls_time, 3)
+        self.assertEqual(settings.hls_list_size, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

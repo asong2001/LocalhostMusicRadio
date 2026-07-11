@@ -184,8 +184,8 @@ RADIO_WEB_PORT=8001
 RADIO_MODE=loop
 RADIO_AUDIO_BITRATE=128k
 RADIO_MP3_BITRATE=128k
-RADIO_HLS_TIME=6
-RADIO_HLS_LIST_SIZE=8
+RADIO_HLS_TIME=3
+RADIO_HLS_LIST_SIZE=5
 ```
 
 命令行参数也可以覆盖常用配置：
@@ -245,6 +245,7 @@ iPhone Safari 通常可以直接播放 HLS。桌面 Chrome 如果要网页播放
 ## 注意事项
 
 - HLS 会有几秒延迟，这是协议特性。
+- HLS 默认使用 3 秒 TS 分片，并返回 `video/MP2T`，以兼容更挑剔的硬件播放器。
 - Docker 部署时，`audio/` 默认只读挂载进容器。
 - 防火墙需要放行 `8000` 端口。
 - 服务启动后如果没有音频文件，会等待并定期重新扫描。

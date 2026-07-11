@@ -238,6 +238,8 @@ class RadioPlayer:
             str(self.settings.hls_time),
             "-hls_list_size",
             str(self.settings.hls_list_size),
+            "-hls_allow_cache",
+            "0",
             "-hls_flags",
             "delete_segments+omit_endlist",
             "-hls_segment_filename",

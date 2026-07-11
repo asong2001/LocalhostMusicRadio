@@ -68,6 +68,6 @@ def load_settings(overrides: SettingsOverrides | None = None) -> Settings:
         mp3_bitrate=os.getenv("RADIO_MP3_BITRATE", "128k"),
         sample_rate=int(os.getenv("RADIO_SAMPLE_RATE", "44100")),
         channels=int(os.getenv("RADIO_CHANNELS", "2")),
-        hls_time=int(os.getenv("RADIO_HLS_TIME", "6")),
-        hls_list_size=int(os.getenv("RADIO_HLS_LIST_SIZE", "8")),
+        hls_time=int(os.getenv("RADIO_HLS_TIME", "3")),
+        hls_list_size=int(os.getenv("RADIO_HLS_LIST_SIZE", "5")),
     )

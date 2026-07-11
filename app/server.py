@@ -16,6 +16,11 @@ LOGGER = logging.getLogger("musicradio.server")
 
 class RadioRequestHandler(SimpleHTTPRequestHandler):
     player: RadioPlayer
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".m3u8": "application/vnd.apple.mpegurl",
+        ".ts": "video/MP2T",
+    }
 
     def __init__(self, *args: Any, public_dir: Path, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(public_dir), **kwargs)
@@ -30,6 +35,8 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
             return
         if path == "/":
             self.path = "/hls/radio.m3u8"
+        else:
+            self.path = path
         super().do_GET()
 
     def do_POST(self) -> None:
@@ -47,7 +54,9 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Accept-Ranges", "bytes")
         super().end_headers()
 
     def do_OPTIONS(self) -> None:
@@ -69,7 +78,7 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Connection", "close")
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("icy-name", "MusicRadio")
         self.end_headers()
 

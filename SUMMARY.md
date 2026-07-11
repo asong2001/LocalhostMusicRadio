@@ -128,6 +128,7 @@ curl -X POST http://localhost:8001/api/audio-dir \
 - 桌面 Chrome/Edge 通常不能直接用原生 `<audio>` 播放 `.m3u8`，后续如果需要浏览器内播放，应加入 HLS.js。
 - Docker 版本已经准备好，但 NAS 上 Docker 镜像源曾出现 `401 Unauthorized`，所以当前建议优先使用 Linux 原生运行。
 - HLS 是直播分片协议，会天然存在几秒延迟。
+- HLS 当前按兼容模式输出：3 秒 TS 分片、禁止缓存标签、`.ts` 返回 `video/MP2T`。
 - 音频目录必须存在，并且服务进程需要有读取权限。
 - 端口 `8000` 和 `8001` 需要在 NAS 或防火墙上允许局域网访问。
 
