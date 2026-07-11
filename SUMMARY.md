@@ -42,6 +42,7 @@ http://<host-ip>:8001/
 - 控制台支持跳过当前曲目。
 - 控制台支持重新扫描目录。
 - 控制台支持修改扫描目录。
+- 控制台支持切换顺序循环和随机播放。
 - 支持 Linux 原生运行。
 - 提供 Dockerfile 和 docker-compose.yml。
 - 提供 Windows、Linux、Docker 启动脚本。
@@ -129,6 +130,7 @@ curl -X POST http://localhost:8001/api/audio-dir \
 - Docker 版本已经准备好，但 NAS 上 Docker 镜像源曾出现 `401 Unauthorized`，所以当前建议优先使用 Linux 原生运行。
 - HLS 是直播分片协议，会天然存在几秒延迟。
 - HLS 当前按兼容模式输出：3 秒 TS 分片、禁止缓存标签、`.ts` 返回 `video/MP2T`。
+- 默认音频码率：HLS/AAC `256k`，MP3 HTTP `192k`。
 - 音频目录必须存在，并且服务进程需要有读取权限。
 - 端口 `8000` 和 `8001` 需要在 NAS 或防火墙上允许局域网访问。
 

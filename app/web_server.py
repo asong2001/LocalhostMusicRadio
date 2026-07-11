@@ -52,6 +52,19 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"ok": True, "audio_dir": str(resolved)})
             return
+        if self.path == "/api/mode":
+            payload = self._read_json_body()
+            mode = str(payload.get("mode", "")).strip()
+            if not mode:
+                self._send_json({"ok": False, "error": "mode is required"}, status=400)
+                return
+            try:
+                resolved_mode = self.player.set_mode(mode)
+            except ValueError as error:
+                self._send_json({"ok": False, "error": str(error)}, status=400)
+                return
+            self._send_json({"ok": True, "mode": resolved_mode})
+            return
         self.send_error(404)
 
     def do_OPTIONS(self) -> None:
@@ -267,6 +280,21 @@ class WebRequestHandler(BaseHTTPRequestHandler):
       outline: 2px solid rgba(15, 118, 110, 0.18);
       border-color: var(--accent);
     }}
+    select {{
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 11px;
+      color: var(--ink);
+      background: #ffffff;
+      font: inherit;
+      font-size: 14px;
+    }}
+    select:focus {{
+      outline: 2px solid rgba(15, 118, 110, 0.18);
+      border-color: var(--accent);
+    }}
     audio {{
       width: 100%;
       margin-top: 8px;
@@ -330,6 +358,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
           <dd id="uptime">-</dd>
           <dt>扫描目录</dt>
           <dd id="audioDir">-</dd>
+          <dt>播放模式</dt>
+          <dd id="playMode">-</dd>
           <dt>最近错误</dt>
           <dd id="lastError">-</dd>
         </dl>
@@ -364,6 +394,20 @@ class WebRequestHandler(BaseHTTPRequestHandler):
           <button id="saveAudioDirBtn" type="button">保存并扫描</button>
         </div>
       </section>
+
+      <section>
+        <h2>播放模式</h2>
+        <div class="field">
+          <label for="modeSelect">模式</label>
+          <select id="modeSelect">
+            <option value="loop">顺序循环</option>
+            <option value="shuffle">随机播放</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button id="saveModeBtn" type="button">保存模式</button>
+        </div>
+      </section>
     </div>
   </main>
   <script>
@@ -375,6 +419,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
       uptime: document.getElementById("uptime"),
       audioDir: document.getElementById("audioDir"),
       audioDirInput: document.getElementById("audioDirInput"),
+      playMode: document.getElementById("playMode"),
+      modeSelect: document.getElementById("modeSelect"),
       lastError: document.getElementById("lastError"),
       streamUrl: document.getElementById("streamUrl"),
       mp3StreamUrl: document.getElementById("mp3StreamUrl"),
@@ -411,6 +457,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         elements.tracksPlayed.textContent = data.tracks_played ?? "-";
         elements.uptime.textContent = formatSeconds(data.uptime_seconds);
         elements.audioDir.textContent = data.audio_dir || "-";
+        elements.playMode.textContent = data.mode === "shuffle" ? "随机播放" : "顺序循环";
+        if (document.activeElement !== elements.modeSelect) {{
+          elements.modeSelect.value = data.mode || "loop";
+        }}
         if (document.activeElement !== elements.audioDirInput) {{
           elements.audioDirInput.value = data.audio_dir || "";
         }}
@@ -457,10 +507,28 @@ class WebRequestHandler(BaseHTTPRequestHandler):
       await refresh();
     }}
 
+    async function saveMode() {{
+      const mode = elements.modeSelect.value;
+      setToast("正在切换播放模式...");
+      const response = await fetch("/api/mode", {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify({{ mode }}),
+      }});
+      const data = await response.json();
+      if (!response.ok) {{
+        setToast(data.error || "切换模式失败");
+        return;
+      }}
+      setToast(mode === "shuffle" ? "已切换到随机播放" : "已切换到顺序循环");
+      await refresh();
+    }}
+
     document.getElementById("refreshBtn").addEventListener("click", refresh);
     document.getElementById("skipBtn").addEventListener("click", () => postAction("/api/skip", "跳过"));
     document.getElementById("rescanBtn").addEventListener("click", () => postAction("/api/rescan", "扫描"));
     document.getElementById("saveAudioDirBtn").addEventListener("click", saveAudioDir);
+    document.getElementById("saveModeBtn").addEventListener("click", saveMode);
     document.getElementById("copyBtn").addEventListener("click", async () => {{
       const url = elements.mp3StreamUrl.textContent || elements.streamUrl.textContent;
       await navigator.clipboard.writeText(url);

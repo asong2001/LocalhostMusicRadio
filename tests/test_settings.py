@@ -23,6 +23,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.hls_time, 3)
         self.assertEqual(settings.hls_list_size, 5)
 
+    def test_default_bitrates_prefer_higher_quality(self) -> None:
+        settings = load_settings()
+
+        self.assertEqual(settings.audio_bitrate, "256k")
+        self.assertEqual(settings.mp3_bitrate, "192k")
+
 
 if __name__ == "__main__":
     unittest.main()

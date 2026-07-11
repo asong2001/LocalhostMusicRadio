@@ -29,6 +29,7 @@ http://<host-ip>:8001/
 - 暴露 MP3 HTTP 直流，默认地址 `/stream.mp3`。
 - 暴露 Web 控制台，默认端口 `8001`。
 - Web 控制台支持修改扫描目录，新目录必须已经存在且服务进程可读。
+- Web 控制台支持在顺序循环和随机播放之间切换。
 - 提供简单 API：
   - `GET /api/status`
   - `POST /api/skip`
@@ -182,8 +183,8 @@ RADIO_HOST=0.0.0.0
 RADIO_PORT=8000
 RADIO_WEB_PORT=8001
 RADIO_MODE=loop
-RADIO_AUDIO_BITRATE=128k
-RADIO_MP3_BITRATE=128k
+RADIO_AUDIO_BITRATE=256k
+RADIO_MP3_BITRATE=192k
 RADIO_HLS_TIME=3
 RADIO_HLS_LIST_SIZE=5
 ```
@@ -230,6 +231,14 @@ curl -X POST http://localhost:8000/api/skip
 
 ```bash
 curl -X POST http://localhost:8000/api/rescan
+```
+
+Web 控制台切换随机播放：
+
+```bash
+curl -X POST http://localhost:8001/api/mode \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"shuffle"}'
 ```
 
 ## 播放客户端

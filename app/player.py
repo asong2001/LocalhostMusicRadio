@@ -70,6 +70,21 @@ class RadioPlayer:
     def rescan(self) -> None:
         self._rescan_event.set()
 
+    def set_mode(self, mode: str) -> str:
+        normalized = mode.strip().lower()
+        if normalized not in {"loop", "shuffle"}:
+            raise ValueError(f"Unsupported playback mode: {mode}")
+
+        with self._lock:
+            self.settings = replace(self.settings, mode=normalized)
+            self._mp3_stream.update_settings(self.settings)
+            self.state.last_error = None
+
+        self._rescan_event.set()
+        self._skip_event.set()
+        self._terminate_process(self._decoder)
+        return normalized
+
     def set_audio_dir(self, audio_dir: str | Path) -> Path:
         resolved = Path(audio_dir).expanduser().resolve()
         if not resolved.exists():
@@ -94,6 +109,7 @@ class RadioPlayer:
             return {
                 "running": self.state.running,
                 "audio_dir": str(self.settings.audio_dir),
+                "mode": self.settings.mode,
                 "current_track": self.state.current_track,
                 "queue_size": self.state.queue_size,
                 "tracks_played": self.state.tracks_played,

@@ -50,6 +50,23 @@ class PlayerTests(unittest.TestCase):
 
         self.assertEqual(snapshot["mp3_stream"], "/stream.mp3")
 
+    def test_set_mode_updates_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            player = RadioPlayer(make_settings(Path(temp_dir)))
+
+            mode = player.set_mode("shuffle")
+            snapshot = player.snapshot()
+
+        self.assertEqual(mode, "shuffle")
+        self.assertEqual(snapshot["mode"], "shuffle")
+
+    def test_set_mode_rejects_unknown_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            player = RadioPlayer(make_settings(Path(temp_dir)))
+
+            with self.assertRaises(ValueError):
+                player.set_mode("repeat-one")
+
     def test_set_audio_dir_updates_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
