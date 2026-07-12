@@ -10,6 +10,7 @@ class Settings:
     audio_dir: Path
     public_dir: Path
     hls_dir: Path
+    config_path: Path
     host: str
     port: int
     web_port: int
@@ -36,6 +37,7 @@ class SettingsOverrides:
     audio_dir: str | None = None
     public_dir: str | None = None
     hls_dir: str | None = None
+    config_path: str | None = None
     host: str | None = None
     port: int | None = None
     web_port: int | None = None
@@ -52,6 +54,9 @@ def load_settings(overrides: SettingsOverrides | None = None) -> Settings:
     hls_dir = Path(
         overrides.hls_dir or os.getenv("RADIO_HLS_DIR", public_dir / "hls")
     ).resolve()
+    config_path = Path(
+        overrides.config_path or os.getenv("RADIO_CONFIG_PATH", base_dir / "config" / "radio.json")
+    ).resolve()
 
     return Settings(
         audio_dir=Path(
@@ -59,6 +64,7 @@ def load_settings(overrides: SettingsOverrides | None = None) -> Settings:
         ).resolve(),
         public_dir=public_dir,
         hls_dir=hls_dir,
+        config_path=config_path,
         host=overrides.host or os.getenv("RADIO_HOST", "0.0.0.0"),
         port=overrides.port or int(os.getenv("RADIO_PORT", "8000")),
         web_port=overrides.web_port or int(os.getenv("RADIO_WEB_PORT", "8001")),

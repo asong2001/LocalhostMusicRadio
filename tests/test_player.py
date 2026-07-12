@@ -11,6 +11,7 @@ def make_settings(root: Path) -> Settings:
         audio_dir=root / "audio",
         public_dir=root / "public",
         hls_dir=root / "public" / "hls",
+        config_path=root / "config" / "radio.json",
         host="0.0.0.0",
         port=8000,
         web_port=8001,
@@ -43,12 +44,13 @@ class PlayerTests(unittest.TestCase):
         self.assertEqual(command[command.index("-hls_list_size") + 1], "8")
         self.assertEqual(command[command.index("-hls_allow_cache") + 1], "0")
 
-    def test_snapshot_includes_mp3_stream_path(self) -> None:
+    def test_snapshot_includes_hls_stream_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             player = RadioPlayer(make_settings(Path(temp_dir)))
             snapshot = player.snapshot()
 
-        self.assertEqual(snapshot["mp3_stream"], "/stream.mp3")
+        self.assertEqual(snapshot["hls_playlist"], "/streams/default/hls/radio.m3u8")
+        self.assertIsNone(snapshot["mp3_stream"])
 
     def test_set_mode_updates_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

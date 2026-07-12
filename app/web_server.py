@@ -5,65 +5,94 @@ import logging
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import urlparse
 
-from .player import RadioPlayer
 from .settings import Settings
+from .stream_manager import StreamManager
 
 
 LOGGER = logging.getLogger("musicradio.web")
 
 
 class WebRequestHandler(BaseHTTPRequestHandler):
-    player: RadioPlayer
+    manager: StreamManager
     settings: Settings
 
     def do_GET(self) -> None:
-        if self.path in {"/", "/index.html"}:
+        path = urlparse(self.path).path
+        if path in {"/", "/index.html"}:
             self._send_html(self._render_index())
             return
-        if self.path == "/api/status":
-            payload = self.player.snapshot()
-            payload["stream_url"] = self._stream_url()
-            payload["mp3_stream_url"] = self._mp3_stream_url()
-            payload["web_port"] = self.settings.web_port
-            self._send_json(payload)
+        if path == "/api/status":
+            self._send_json(self._status_payload())
+            return
+        if path == "/api/library":
+            self._send_json(self.manager.library())
+            return
+        if path == "/api/streams":
+            self._send_json({"streams": self._stream_payloads()})
+            return
+        if path == "/api/playlist":
+            self._send_json(self._playlist_payload())
             return
         self.send_error(404)
 
     def do_POST(self) -> None:
-        if self.path == "/api/skip":
-            self.player.skip()
+        path = urlparse(self.path).path
+        if path == "/api/skip":
+            self.manager.skip()
             self._send_json({"ok": True})
             return
-        if self.path == "/api/rescan":
-            self.player.rescan()
+        if path == "/api/rescan" or path == "/api/library/rescan":
+            self._send_json(self.manager.rescan_library())
+            return
+        if path == "/api/library":
+            payload = self._read_json_body()
+            try:
+                self._send_json(self.manager.set_library_dir(str(payload.get("library_dir", ""))))
+            except ValueError as error:
+                self._send_json({"ok": False, "error": str(error)}, status=400)
+            return
+        if path == "/api/streams":
+            payload = self._read_json_body()
+            try:
+                self._send_json(self.manager.create_stream(payload), status=201)
+            except ValueError as error:
+                self._send_json({"ok": False, "error": str(error)}, status=400)
+            return
+        if path == "/api/playlist/update":
+            self._send_json(self._playlist_payload())
+            return
+        if path.startswith("/api/streams/") and path.endswith("/skip"):
+            stream_id = path.split("/")[3]
+            self.manager.skip(stream_id)
             self._send_json({"ok": True})
             return
-        if self.path == "/api/audio-dir":
-            payload = self._read_json_body()
-            audio_dir = str(payload.get("audio_dir", "")).strip()
-            if not audio_dir:
-                self._send_json({"ok": False, "error": "audio_dir is required"}, status=400)
-                return
+        self.send_error(404)
+
+    def do_PATCH(self) -> None:
+        path = urlparse(self.path).path
+        if path.startswith("/api/streams/"):
+            stream_id = path.split("/")[3]
             try:
-                resolved = self.player.set_audio_dir(audio_dir)
+                self._send_json(self.manager.update_stream(stream_id, self._read_json_body()))
+            except KeyError:
+                self.send_error(404)
             except ValueError as error:
                 self._send_json({"ok": False, "error": str(error)}, status=400)
-                return
-            self._send_json({"ok": True, "audio_dir": str(resolved)})
             return
-        if self.path == "/api/mode":
-            payload = self._read_json_body()
-            mode = str(payload.get("mode", "")).strip()
-            if not mode:
-                self._send_json({"ok": False, "error": "mode is required"}, status=400)
-                return
+        self.send_error(404)
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        if path.startswith("/api/streams/"):
+            stream_id = path.split("/")[3]
             try:
-                resolved_mode = self.player.set_mode(mode)
-            except ValueError as error:
-                self._send_json({"ok": False, "error": str(error)}, status=400)
+                self.manager.delete_stream(stream_id)
+            except KeyError:
+                self.send_error(404)
                 return
-            self._send_json({"ok": True, "mode": resolved_mode})
+            self._send_json({"ok": True})
             return
         self.send_error(404)
 
@@ -73,7 +102,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
@@ -85,14 +114,11 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length <= 0:
             return {}
-        body = self.rfile.read(length).decode("utf-8")
         try:
-            payload = json.loads(body)
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except json.JSONDecodeError:
             return {}
-        if isinstance(payload, dict):
-            return payload
-        return {}
+        return payload if isinstance(payload, dict) else {}
 
     def _send_json(self, payload: dict[str, object], status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -110,443 +136,313 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _stream_url(self) -> str:
-        host_header = self.headers.get("Host", "")
-        hostname = host_header.split(":", 1)[0] or "localhost"
-        return f"http://{hostname}:{self.settings.port}/hls/radio.m3u8"
+    def _status_payload(self) -> dict[str, object]:
+        payload = self.manager.status()
+        payload["stream_url"] = self._absolute("/hls/radio.m3u8")
+        payload["mp3_stream_url"] = self._absolute("/stream.mp3")
+        payload["playlist_url"] = self._absolute("/playlist.m3u")
+        return payload
 
-    def _mp3_stream_url(self) -> str:
+    def _stream_payloads(self) -> list[dict[str, object]]:
+        streams = []
+        for stream in self.manager.list_streams():
+            urls = stream.get("urls", {})
+            stream["absolute_urls"] = {
+                key: self._absolute(value) if value else None
+                for key, value in urls.items()
+            }
+            streams.append(stream)
+        return streams
+
+    def _playlist_payload(self) -> dict[str, object]:
+        hostname = self.headers.get("Host", "").split(":", 1)[0] or "localhost"
+        entries = [
+            {"name": name, "url": url}
+            for name, url in self.manager.playlist_entries(hostname, self.settings.port)
+        ]
+        return {
+            "playlist_url": self._absolute("/playlist.m3u"),
+            "entries": entries,
+            "entry_count": len(entries),
+        }
+
+    def _absolute(self, path: str | None) -> str | None:
+        if not path:
+            return None
         host_header = self.headers.get("Host", "")
         hostname = host_header.split(":", 1)[0] or "localhost"
-        return f"http://{hostname}:{self.settings.port}/stream.mp3"
+        return f"http://{hostname}:{self.settings.port}{path}"
 
     def _render_index(self) -> str:
-        title = "MusicRadio Control"
-        escaped_title = escape(title)
+        title = escape("MusicRadio Control")
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escaped_title}</title>
+  <title>{title}</title>
   <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f7f8f5;
-      --panel: #ffffff;
-      --ink: #1e2622;
-      --muted: #66716b;
-      --line: #dfe5dd;
-      --accent: #0f766e;
-      --accent-strong: #115e59;
-      --warn: #b45309;
-      --ok-bg: #dff4ea;
-      --ok-ink: #17633a;
-    }}
+    :root {{ --bg:#f7f8f5; --panel:#fff; --ink:#1e2622; --muted:#66716b; --line:#dfe5dd; --accent:#0f766e; }}
     * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--ink);
-    }}
-    main {{
-      width: min(1040px, calc(100vw - 32px));
-      margin: 0 auto;
-      padding: 28px 0 36px;
-    }}
-    header {{
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 18px;
-      margin-bottom: 22px;
-    }}
-    h1 {{
-      margin: 0;
-      font-size: clamp(28px, 4vw, 44px);
-      line-height: 1.05;
-      font-weight: 760;
-    }}
-    .subtitle {{
-      margin: 8px 0 0;
-      color: var(--muted);
-      font-size: 15px;
-    }}
-    .status-pill {{
-      min-width: 116px;
-      padding: 9px 12px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--panel);
-      text-align: center;
-      font-weight: 700;
-      color: var(--warn);
-    }}
-    .status-pill.running {{
-      color: var(--ok-ink);
-      background: var(--ok-bg);
-      border-color: #b7e5ca;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
-      gap: 16px;
-    }}
-    section {{
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 18px;
-    }}
-    h2 {{
-      margin: 0 0 14px;
-      font-size: 18px;
-      line-height: 1.2;
-    }}
-    dl {{
-      display: grid;
-      grid-template-columns: 132px minmax(0, 1fr);
-      gap: 12px 14px;
-      margin: 0;
-      align-items: start;
-    }}
-    dt {{
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    dd {{
-      margin: 0;
-      min-width: 0;
-      word-break: break-word;
-      font-size: 14px;
-    }}
-    .actions {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 18px;
-    }}
-    button, a.button {{
-      appearance: none;
-      border: 1px solid transparent;
-      border-radius: 7px;
-      background: var(--accent);
-      color: white;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 38px;
-      padding: 0 14px;
-      font-size: 14px;
-      font-weight: 700;
-      text-decoration: none;
-    }}
-    button.secondary, a.button.secondary {{
-      background: #ffffff;
-      color: var(--ink);
-      border-color: var(--line);
-    }}
-    button:hover, a.button:hover {{
-      background: var(--accent-strong);
-    }}
-    button.secondary:hover, a.button.secondary:hover {{
-      background: #eef3ef;
-    }}
-    .field {{
-      display: grid;
-      gap: 7px;
-      margin-top: 12px;
-    }}
-    label {{
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
-    }}
-    input {{
-      width: 100%;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 0 11px;
-      color: var(--ink);
-      background: #ffffff;
-      font: inherit;
-      font-size: 14px;
-    }}
-    input:focus {{
-      outline: 2px solid rgba(15, 118, 110, 0.18);
-      border-color: var(--accent);
-    }}
-    select {{
-      width: 100%;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 0 11px;
-      color: var(--ink);
-      background: #ffffff;
-      font: inherit;
-      font-size: 14px;
-    }}
-    select:focus {{
-      outline: 2px solid rgba(15, 118, 110, 0.18);
-      border-color: var(--accent);
-    }}
-    audio {{
-      width: 100%;
-      margin-top: 8px;
-    }}
-    code {{
-      display: block;
-      width: 100%;
-      overflow-wrap: anywhere;
-      padding: 10px 11px;
-      border-radius: 7px;
-      background: #f0f3ef;
-      color: #25312c;
-      font-size: 13px;
-      line-height: 1.4;
-    }}
-    .toast {{
-      min-height: 20px;
-      margin-top: 12px;
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    @media (max-width: 760px) {{
-      header {{
-        align-items: stretch;
-        flex-direction: column;
-      }}
-      .grid {{
-        grid-template-columns: 1fr;
-      }}
-      dl {{
-        grid-template-columns: 1fr;
-        gap: 4px;
-      }}
-      dd {{
-        margin-bottom: 8px;
-      }}
-    }}
+    body {{ margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }}
+    main {{ width:min(1180px, calc(100vw - 32px)); margin:0 auto; padding:28px 0 40px; }}
+    header {{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-bottom:20px; }}
+    h1 {{ margin:0; font-size:38px; line-height:1; }}
+    h2 {{ margin:0 0 14px; font-size:18px; }}
+    section {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }}
+    .grid {{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; }}
+    .row {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }}
+    label {{ display:block; color:var(--muted); font-size:13px; font-weight:700; margin-bottom:6px; }}
+    input, select {{ min-height:38px; border:1px solid var(--line); border-radius:7px; padding:0 10px; font:inherit; }}
+    input[type="text"] {{ width:100%; }}
+    button, a.button {{ min-height:38px; border:1px solid transparent; border-radius:7px; padding:0 14px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; }}
+    button.secondary {{ background:#fff; color:var(--ink); border-color:var(--line); }}
+    code {{ display:block; overflow-wrap:anywhere; padding:9px 10px; background:#f0f3ef; border-radius:7px; font-size:13px; }}
+    .streams {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }}
+    .card {{ border:1px solid var(--line); border-radius:8px; padding:12px; }}
+    .muted {{ color:var(--muted); }}
+    .files {{ max-height:360px; overflow:auto; border:1px solid var(--line); border-radius:8px; padding:8px; }}
+    .folder-row {{ position:sticky; top:0; display:flex; gap:8px; align-items:flex-start; padding:8px 6px; background:#eaf1ed; color:var(--ink); font-weight:800; border-radius:6px; margin:6px 0 4px; overflow-wrap:anywhere; word-break:break-word; }}
+    .folder-toggle {{ min-height:22px; width:24px; padding:0; border:1px solid var(--line); background:#fff; color:var(--ink); justify-content:center; flex:0 0 auto; }}
+    .folder-title {{ flex:1; line-height:1.35; }}
+    .folder-row input, .file-row input {{ margin-top:2px; flex:0 0 auto; }}
+    .file-row {{ display:flex; gap:8px; align-items:flex-start; padding:5px 2px; border-bottom:1px solid #f0f0f0; }}
+    .file-row.nested {{ margin-left:32px; }}
+    .file-row span {{ white-space:normal; overflow-wrap:anywhere; word-break:break-word; line-height:1.35; }}
+    .toast {{ min-height:22px; color:var(--muted); font-size:13px; }}
+    @media (max-width: 820px) {{ .grid {{ grid-template-columns:1fr; }} header {{ align-items:flex-start; flex-direction:column; }} }}
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <div>
-        <h1>MusicRadio</h1>
-        <p class="subtitle">本地音乐电台控制台</p>
-      </div>
-      <div id="runningPill" class="status-pill">读取中</div>
-    </header>
-
-    <div class="grid">
-      <section>
-        <h2>播放状态</h2>
-        <dl>
-          <dt>当前曲目</dt>
-          <dd id="currentTrack">-</dd>
-          <dt>队列数量</dt>
-          <dd id="queueSize">-</dd>
-          <dt>已播放</dt>
-          <dd id="tracksPlayed">-</dd>
-          <dt>运行时间</dt>
-          <dd id="uptime">-</dd>
-          <dt>扫描目录</dt>
-          <dd id="audioDir">-</dd>
-          <dt>播放模式</dt>
-          <dd id="playMode">-</dd>
-          <dt>最近错误</dt>
-          <dd id="lastError">-</dd>
-        </dl>
-        <div class="actions">
-          <button id="refreshBtn" type="button">刷新</button>
-          <button id="skipBtn" class="secondary" type="button">跳过当前</button>
-          <button id="rescanBtn" class="secondary" type="button">重新扫描</button>
-        </div>
-        <div id="toast" class="toast"></div>
-      </section>
-
-      <section>
-        <h2>直播地址</h2>
-        <label>HLS</label>
-        <code id="streamUrl">-</code>
-        <label>MP3 HTTP</label>
-        <code id="mp3StreamUrl">-</code>
-        <audio id="audioPlayer" controls preload="none"></audio>
-        <div class="actions">
-          <a id="openStream" class="button" href="#" target="_blank" rel="noreferrer">打开流</a>
-          <button id="copyBtn" class="secondary" type="button">复制地址</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>扫描目录</h2>
-        <div class="field">
-          <label for="audioDirInput">音频目录</label>
-          <input id="audioDirInput" type="text" autocomplete="off" spellcheck="false">
-        </div>
-        <div class="actions">
-          <button id="saveAudioDirBtn" type="button">保存并扫描</button>
-        </div>
-      </section>
-
-      <section>
-        <h2>播放模式</h2>
-        <div class="field">
-          <label for="modeSelect">模式</label>
-          <select id="modeSelect">
-            <option value="loop">顺序循环</option>
-            <option value="shuffle">随机播放</option>
-          </select>
-        </div>
-        <div class="actions">
-          <button id="saveModeBtn" type="button">保存模式</button>
-        </div>
-      </section>
+<main>
+  <header>
+    <div><h1>MusicRadio</h1><div class="muted">多流本地音乐电台</div></div>
+    <div class="row">
+      <button id="updatePlaylistBtn" class="secondary" type="button">更新 M3U</button>
+      <a id="playlistLink" class="button" href="#" target="_blank" rel="noreferrer">M3U</a>
     </div>
-  </main>
-  <script>
-    const elements = {{
-      runningPill: document.getElementById("runningPill"),
-      currentTrack: document.getElementById("currentTrack"),
-      queueSize: document.getElementById("queueSize"),
-      tracksPlayed: document.getElementById("tracksPlayed"),
-      uptime: document.getElementById("uptime"),
-      audioDir: document.getElementById("audioDir"),
-      audioDirInput: document.getElementById("audioDirInput"),
-      playMode: document.getElementById("playMode"),
-      modeSelect: document.getElementById("modeSelect"),
-      lastError: document.getElementById("lastError"),
-      streamUrl: document.getElementById("streamUrl"),
-      mp3StreamUrl: document.getElementById("mp3StreamUrl"),
-      openStream: document.getElementById("openStream"),
-      audioPlayer: document.getElementById("audioPlayer"),
-      toast: document.getElementById("toast"),
-    }};
+  </header>
 
-    function formatSeconds(value) {{
-      const seconds = Number(value || 0);
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = seconds % 60;
-      return `${{h}}h ${{m}}m ${{s}}s`;
-    }}
+  <section>
+    <h2>音乐库</h2>
+    <div class="row">
+      <div style="flex:1"><label>扫描目录</label><input id="libraryDir" type="text"></div>
+      <button id="saveLibraryBtn" type="button">保存目录</button>
+      <button id="rescanBtn" class="secondary" type="button">重新扫描</button>
+    </div>
+    <div class="muted" id="libraryMeta" style="margin-top:8px"></div>
+    <div class="muted" id="playlistMeta" style="margin-top:4px"></div>
+    <div class="toast" id="toast"></div>
+  </section>
 
-    function basename(path) {{
-      if (!path) return "-";
-      return String(path).split(/[\\\\/]/).pop() || path;
-    }}
+  <div class="grid">
+    <section>
+      <h2>创建流</h2>
+      <div class="row">
+        <div style="flex:1"><label>显示名称</label><input id="newName" type="text" value="新电台"></div>
+        <div><label>英文 ID</label><input id="newId" type="text" value="stream-1"></div>
+        <div><label>格式</label><select id="newFormat"><option value="m3u8">m3u8</option><option value="mp3">mp3</option></select></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button id="createBtn" type="button">创建</button></div>
+    </section>
 
-    function setToast(message) {{
-      elements.toast.textContent = message || "";
-    }}
+    <section>
+      <h2>音频选择</h2>
+      <div class="row">
+        <input id="fileSearch" type="text" placeholder="搜索文件" style="flex:1">
+        <button id="selectAllBtn" class="secondary" type="button">全选</button>
+        <button id="invertBtn" class="secondary" type="button">反选</button>
+        <button id="collapseAllBtn" class="secondary" type="button">折叠</button>
+      </div>
+      <div id="files" class="files" style="margin-top:10px"></div>
+    </section>
+  </div>
 
-    async function refresh() {{
-      try {{
-        const response = await fetch("/api/status", {{ cache: "no-store" }});
-        const data = await response.json();
-        elements.runningPill.textContent = data.running ? "运行中" : "已停止";
-        elements.runningPill.classList.toggle("running", Boolean(data.running));
-        elements.currentTrack.textContent = basename(data.current_track);
-        elements.queueSize.textContent = data.queue_size ?? "-";
-        elements.tracksPlayed.textContent = data.tracks_played ?? "-";
-        elements.uptime.textContent = formatSeconds(data.uptime_seconds);
-        elements.audioDir.textContent = data.audio_dir || "-";
-        elements.playMode.textContent = data.mode === "shuffle" ? "随机播放" : "顺序循环";
-        if (document.activeElement !== elements.modeSelect) {{
-          elements.modeSelect.value = data.mode || "loop";
-        }}
-        if (document.activeElement !== elements.audioDirInput) {{
-          elements.audioDirInput.value = data.audio_dir || "";
-        }}
-        elements.lastError.textContent = data.last_error || "-";
-        elements.streamUrl.textContent = data.stream_url || "-";
-        elements.mp3StreamUrl.textContent = data.mp3_stream_url || "-";
-        elements.openStream.href = data.mp3_stream_url || data.stream_url || "#";
-        if (data.mp3_stream_url && elements.audioPlayer.src !== data.mp3_stream_url) {{
-          elements.audioPlayer.src = data.mp3_stream_url;
-        }}
-      }} catch (error) {{
-        elements.runningPill.textContent = "连接失败";
-        elements.runningPill.classList.remove("running");
-        setToast(String(error));
-      }}
-    }}
-
-    async function postAction(path, label) {{
-      setToast(`${{label}}...`);
-      const response = await fetch(path, {{ method: "POST" }});
-      if (!response.ok) throw new Error(`${{label}}失败`);
-      setToast(`${{label}}完成`);
-      await refresh();
-    }}
-
-    async function saveAudioDir() {{
-      const audioDir = elements.audioDirInput.value.trim();
-      if (!audioDir) {{
-        setToast("请输入音频目录");
-        return;
-      }}
-      setToast("正在切换扫描目录...");
-      const response = await fetch("/api/audio-dir", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ audio_dir: audioDir }}),
-      }});
-      const data = await response.json();
-      if (!response.ok) {{
-        setToast(data.error || "切换目录失败");
-        return;
-      }}
-      setToast("扫描目录已更新");
-      await refresh();
-    }}
-
-    async function saveMode() {{
-      const mode = elements.modeSelect.value;
-      setToast("正在切换播放模式...");
-      const response = await fetch("/api/mode", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ mode }}),
-      }});
-      const data = await response.json();
-      if (!response.ok) {{
-        setToast(data.error || "切换模式失败");
-        return;
-      }}
-      setToast(mode === "shuffle" ? "已切换到随机播放" : "已切换到顺序循环");
-      await refresh();
-    }}
-
-    document.getElementById("refreshBtn").addEventListener("click", refresh);
-    document.getElementById("skipBtn").addEventListener("click", () => postAction("/api/skip", "跳过"));
-    document.getElementById("rescanBtn").addEventListener("click", () => postAction("/api/rescan", "扫描"));
-    document.getElementById("saveAudioDirBtn").addEventListener("click", saveAudioDir);
-    document.getElementById("saveModeBtn").addEventListener("click", saveMode);
-    document.getElementById("copyBtn").addEventListener("click", async () => {{
-      const url = elements.mp3StreamUrl.textContent || elements.streamUrl.textContent;
-      await navigator.clipboard.writeText(url);
-      setToast("地址已复制");
+  <section>
+    <h2>流列表</h2>
+    <div id="streams" class="streams"></div>
+  </section>
+</main>
+<script>
+const state = {{ library: {{ files: [] }}, streams: [], activeStreamId: null, expandedFolders: new Set() }};
+const $ = id => document.getElementById(id);
+function toast(message) {{ $("toast").textContent = message || ""; }}
+function escapeHtml(value) {{
+  return String(value).replace(/[&<>"']/g, char => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}}[char]));
+}}
+async function api(path, options = {{}}) {{
+  const response = await fetch(path, {{ cache: "no-store", ...options }});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {{}};
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}}
+function selectedSet() {{
+  const stream = state.streams.find(item => item.id === state.activeStreamId);
+  return new Set(stream ? stream.selected_files || [] : []);
+}}
+function activeStream() {{
+  return state.streams.find(item => item.id === state.activeStreamId);
+}}
+function setActiveSelection(selected) {{
+  const stream = activeStream();
+  if (stream) stream.selected_files = Array.from(selected).sort();
+}}
+function folderName(path) {{
+  const parts = path.split("/");
+  return parts.length > 1 ? parts[0] : "根目录";
+}}
+function groupedFiles(files) {{
+  return files.reduce((groups, file) => {{
+    const folder = folderName(file.path);
+    if (!groups.has(folder)) groups.set(folder, []);
+    groups.get(folder).push(file);
+    return groups;
+  }}, new Map());
+}}
+function renderFiles() {{
+  const selected = selectedSet();
+  const groups = groupedFiles(visibleFiles());
+  $("files").innerHTML = Array.from(groups.entries()).map(([folder, files]) => {{
+    const selectedCount = files.filter(file => selected.has(file.path)).length;
+    const folderChecked = selectedCount === files.length && files.length > 0 ? "checked" : "";
+    const expanded = state.expandedFolders.has(folder);
+    const rows = expanded ? files.map(file => `<label class="file-row nested"><input type="checkbox" data-file="${{escapeHtml(file.path)}}" ${{selected.has(file.path) ? "checked" : ""}}><span title="${{escapeHtml(file.path)}}">${{escapeHtml(file.path)}}</span></label>`).join("") : "";
+    return `<div class="folder-row"><button class="folder-toggle" type="button" data-toggle-folder="${{escapeHtml(folder)}}" title="${{expanded ? "折叠" : "展开"}}">${{expanded ? "−" : "+"}}</button><input type="checkbox" data-folder="${{escapeHtml(folder)}}" ${{folderChecked}}><span class="folder-title">${{escapeHtml(folder)}} <span class="muted">(${{selectedCount}}/${{files.length}})</span></span></div>${{rows}}`;
+  }}).join("") || `<div class="muted">没有匹配的音频文件</div>`;
+  $("files").querySelectorAll("input[data-folder]").forEach(input => {{
+    const files = visibleFiles().filter(file => folderName(file.path) === input.dataset.folder);
+    const selectedCount = files.filter(file => selected.has(file.path)).length;
+    input.indeterminate = selectedCount > 0 && selectedCount < files.length;
+  }});
+}}
+function visibleFiles() {{
+  const query = $("fileSearch").value.toLowerCase();
+  return state.library.files.filter(file => file.path.toLowerCase().includes(query));
+}}
+function renderStreams() {{
+  $("streams").innerHTML = state.streams.map(stream => {{
+    const urls = stream.absolute_urls || {{}};
+    const selected = stream.selected_files ? stream.selected_files.length : 0;
+    const active = stream.id === state.activeStreamId ? "2px solid var(--accent)" : "1px solid var(--line)";
+    const streamUrl = urls.hls || urls.mp3 || "";
+    return `<div class="card" style="border:${{active}}">
+      <div class="row" style="justify-content:space-between"><strong>${{stream.name}}</strong><span class="muted">${{stream.format}}</span></div>
+      <div class="muted">ID: ${{stream.id}} · ${{stream.enabled ? "启用" : "停用"}} · ${{stream.mode === "shuffle" ? "随机" : "顺序"}} · ${{selected}} 首</div>
+      <div class="muted">当前: ${{stream.current_track ? stream.current_track.split(/[\\\\/]/).pop() : "-"}}</div>
+      <div class="muted">状态: ${{stream.last_error || (stream.running ? "运行中" : "未运行")}}</div>
+      <code>${{streamUrl || "-"}}</code>
+      <div class="row" style="margin-top:10px">
+        <button data-action="select" data-id="${{stream.id}}" type="button">选择</button>
+        <button data-action="toggle" data-id="${{stream.id}}" class="secondary" type="button">${{stream.enabled ? "停用" : "启用"}}</button>
+        <button data-action="mode" data-id="${{stream.id}}" class="secondary" type="button">${{stream.mode === "shuffle" ? "顺序" : "随机"}}</button>
+        <button data-action="save" data-id="${{stream.id}}" class="secondary" type="button">保存并重启</button>
+        <button data-action="skip" data-id="${{stream.id}}" class="secondary" type="button">跳过</button>
+        <button data-action="delete" data-id="${{stream.id}}" class="secondary" type="button">删除</button>
+      </div>
+    </div>`;
+  }}).join("");
+}}
+async function refresh() {{
+  const status = await api("/api/status");
+  state.library = await api("/api/library");
+  state.streams = (await api("/api/streams")).streams;
+  $("libraryDir").value = state.library.library_dir || "";
+  $("rescanBtn").disabled = !!state.library.scanning;
+  const fileCount = state.library.files ? state.library.files.length : 0;
+  const scanText = state.library.scanning ? "扫描中..." : state.library.scanned_at ? `上次扫描: ${{new Date(state.library.scanned_at * 1000).toLocaleString()}}` : "尚未扫描";
+  $("libraryMeta").textContent = `${{scanText}} · 已缓存 ${{fileCount}} 个音频文件${{state.library.error ? " · 错误: " + state.library.error : ""}}`;
+  $("playlistLink").href = status.playlist_url || "#";
+  if (!state.activeStreamId && state.streams.length) state.activeStreamId = state.streams[0].id;
+  renderStreams();
+  renderFiles();
+  await refreshPlaylist(false);
+}}
+function checkedFiles() {{
+  const stream = activeStream();
+  return stream ? stream.selected_files || [] : [];
+}}
+async function updateStream(id, patch) {{
+  await api(`/api/streams/${{id}}`, {{ method: "PATCH", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify(patch) }});
+  await refresh();
+}}
+async function refreshPlaylist(showToast = true) {{
+  const playlist = await api("/api/playlist");
+  const url = playlist.playlist_url ? `${{playlist.playlist_url}}?t=${{Date.now()}}` : "#";
+  $("playlistLink").href = url;
+  $("playlistMeta").textContent = `M3U 当前包含 ${{playlist.entry_count || 0}} 个启用电台`;
+  if (showToast) toast("M3U 已更新");
+}}
+$("saveLibraryBtn").onclick = async () => {{ try {{ await api("/api/library", {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{library_dir:$("libraryDir").value}}) }}); toast("目录已保存"); await refresh(); }} catch(e) {{ toast(e.message); }} }};
+$("rescanBtn").onclick = async () => {{ await api("/api/library/rescan", {{ method:"POST" }}); toast("已开始后台扫描"); await refresh(); }};
+$("updatePlaylistBtn").onclick = async () => {{ await api("/api/playlist/update", {{ method:"POST" }}); await refreshPlaylist(true); }};
+$("createBtn").onclick = async () => {{ try {{ await api("/api/streams", {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ id:$("newId").value, name:$("newName").value, format:$("newFormat").value, enabled:true, mode:"loop", selected_files:[] }}) }}); toast("流已创建，请勾选音频后保存并重启"); await refresh(); await refreshPlaylist(false); }} catch(e) {{ toast(e.message); }} }};
+$("fileSearch").oninput = renderFiles;
+$("files").onclick = event => {{
+  const button = event.target.closest("button[data-toggle-folder]");
+  if (!button) return;
+  const folder = button.dataset.toggleFolder;
+  if (state.expandedFolders.has(folder)) state.expandedFolders.delete(folder);
+  else state.expandedFolders.add(folder);
+  renderFiles();
+}};
+$("files").onchange = event => {{
+  const input = event.target.closest("input[type=checkbox]");
+  if (!input) return;
+  const selected = selectedSet();
+  if (input.dataset.folder) {{
+    visibleFiles().filter(file => folderName(file.path) === input.dataset.folder).forEach(file => {{
+      if (input.checked) selected.add(file.path);
+      else selected.delete(file.path);
     }});
-
-    refresh();
-    window.setInterval(refresh, 5000);
-  </script>
+  }} else if (input.dataset.file) {{
+    if (input.checked) selected.add(input.dataset.file);
+    else selected.delete(input.dataset.file);
+  }}
+  setActiveSelection(selected);
+  renderFiles();
+}};
+$("selectAllBtn").onclick = () => {{
+  const selected = selectedSet();
+  visibleFiles().forEach(file => selected.add(file.path));
+  setActiveSelection(selected);
+  renderFiles();
+}};
+$("invertBtn").onclick = () => {{
+  const selected = selectedSet();
+  visibleFiles().forEach(file => selected.has(file.path) ? selected.delete(file.path) : selected.add(file.path));
+  setActiveSelection(selected);
+  renderFiles();
+}};
+$("collapseAllBtn").onclick = () => {{
+  state.expandedFolders.clear();
+  renderFiles();
+}};
+$("streams").onclick = async event => {{
+  const button = event.target.closest("button");
+  if (!button) return;
+  const id = button.dataset.id;
+  const action = button.dataset.action;
+  const stream = state.streams.find(item => item.id === id);
+  if (action === "select") {{ state.activeStreamId = id; renderStreams(); renderFiles(); return; }}
+  if (action === "toggle") await updateStream(id, {{ enabled: !stream.enabled }});
+  if (action === "mode") await updateStream(id, {{ mode: stream.mode === "shuffle" ? "loop" : "shuffle" }});
+  if (action === "save") {{ await updateStream(id, {{ selected_files: checkedFiles() }}); toast("已保存并重启该电台"); }}
+  if (action === "skip") {{ await api(`/api/streams/${{id}}/skip`, {{ method:"POST" }}); await refresh(); }}
+  if (action === "delete") {{ await api(`/api/streams/${{id}}`, {{ method:"DELETE" }}); state.activeStreamId = null; await refresh(); }}
+}};
+refresh();
+setInterval(refresh, 5000);
+</script>
 </body>
 </html>"""
 
 
-def create_web_server(settings: Settings, player: RadioPlayer) -> ThreadingHTTPServer:
+def create_web_server(settings: Settings, manager: StreamManager) -> ThreadingHTTPServer:
     class BoundWebRequestHandler(WebRequestHandler):
         pass
 
-    BoundWebRequestHandler.player = player
+    BoundWebRequestHandler.manager = manager
     BoundWebRequestHandler.settings = settings
 
     return ThreadingHTTPServer((settings.host, settings.web_port), BoundWebRequestHandler)

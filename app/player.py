@@ -11,12 +11,24 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .mp3_stream import Mp3ClientIterator, Mp3Stream
-from .scanner import scan_audio_files
 from .settings import Settings
 
 
 LOGGER = logging.getLogger("musicradio.player")
 PCM_CHUNK_SIZE = 64 * 1024
+STREAM_FORMATS = {"m3u8", "mp3"}
+
+
+@dataclass(frozen=True)
+class PlaybackConfig:
+    id: str = "default"
+    name: str = "MusicRadio"
+    format: str = "m3u8"
+    enabled: bool = True
+    mode: str = "loop"
+    selected_files: tuple[str, ...] = ()
+    library_dir: Path = Path()
+    hls_dir: Path | None = None
 
 
 @dataclass
@@ -26,13 +38,17 @@ class PlayerState:
     queue_size: int = 0
     tracks_played: int = 0
     last_error: str | None = None
-    hls_playlist: str = "/hls/radio.m3u8"
     started_at: float = field(default_factory=time.time)
 
 
 class RadioPlayer:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, config: PlaybackConfig | None = None) -> None:
         self.settings = settings
+        self.config = config or PlaybackConfig(
+            mode=settings.mode,
+            library_dir=settings.audio_dir,
+            hls_dir=settings.hls_dir,
+        )
         self.state = PlayerState()
         self._stop_event = threading.Event()
         self._skip_event = threading.Event()
@@ -43,15 +59,43 @@ class RadioPlayer:
         self._mp3_stream = Mp3Stream(settings)
         self._lock = threading.Lock()
 
+    @property
+    def stream_id(self) -> str:
+        return self.config.id
+
+    @property
+    def stream_format(self) -> str:
+        return self.config.format
+
+    @property
+    def hls_dir(self) -> Path:
+        return self.config.hls_dir or self.settings.hls_dir
+
+    @property
+    def playlist_path(self) -> Path:
+        return self.hls_dir / "radio.m3u8"
+
+    @property
+    def segment_pattern(self) -> Path:
+        return self.hls_dir / "segment_%05d.ts"
+
     def start(self) -> None:
+        if not self.config.enabled:
+            self._set_error("Stream is disabled")
+            return
         if self._thread and self._thread.is_alive():
             return
 
-        self.settings.hls_dir.mkdir(parents=True, exist_ok=True)
-        self._cleanup_hls_files()
+        if self.stream_format == "m3u8":
+            self.hls_dir.mkdir(parents=True, exist_ok=True)
+            self._cleanup_hls_files()
 
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="radio-player", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"radio-player-{self.stream_id}",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -70,19 +114,22 @@ class RadioPlayer:
     def rescan(self) -> None:
         self._rescan_event.set()
 
+    def update_config(self, config: PlaybackConfig) -> None:
+        with self._lock:
+            self.config = config
+            self._mp3_stream.update_settings(self.settings)
+            self.state.queue_size = 0
+            self.state.current_track = None
+            self.state.last_error = None
+        self._rescan_event.set()
+        self._skip_event.set()
+        self._terminate_process(self._decoder)
+
     def set_mode(self, mode: str) -> str:
         normalized = mode.strip().lower()
         if normalized not in {"loop", "shuffle"}:
             raise ValueError(f"Unsupported playback mode: {mode}")
-
-        with self._lock:
-            self.settings = replace(self.settings, mode=normalized)
-            self._mp3_stream.update_settings(self.settings)
-            self.state.last_error = None
-
-        self._rescan_event.set()
-        self._skip_event.set()
-        self._terminate_process(self._decoder)
+        self.update_config(replace(self.config, mode=normalized))
         return normalized
 
     def set_audio_dir(self, audio_dir: str | Path) -> Path:
@@ -91,33 +138,38 @@ class RadioPlayer:
             raise ValueError(f"Audio directory does not exist: {resolved}")
         if not resolved.is_dir():
             raise ValueError(f"Audio path is not a directory: {resolved}")
-
-        with self._lock:
-            self.settings = replace(self.settings, audio_dir=resolved)
-            self._mp3_stream.update_settings(self.settings)
-            self.state.queue_size = 0
-            self.state.current_track = None
-            self.state.last_error = None
-
-        self._rescan_event.set()
-        self._skip_event.set()
-        self._terminate_process(self._decoder)
+        self.update_config(replace(self.config, library_dir=resolved))
         return resolved
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
             return {
+                "id": self.config.id,
+                "name": self.config.name,
+                "format": self.config.format,
+                "enabled": self.config.enabled,
                 "running": self.state.running,
-                "audio_dir": str(self.settings.audio_dir),
-                "mode": self.settings.mode,
+                "audio_dir": str(self.config.library_dir),
+                "mode": self.config.mode,
+                "selected_count": len(self.config.selected_files),
                 "current_track": self.state.current_track,
                 "queue_size": self.state.queue_size,
                 "tracks_played": self.state.tracks_played,
                 "last_error": self.state.last_error,
-                "hls_playlist": self.state.hls_playlist,
-                "mp3_stream": "/stream.mp3",
+                "hls_playlist": self.hls_path(),
+                "mp3_stream": self.mp3_path(),
                 "uptime_seconds": int(time.time() - self.state.started_at),
             }
+
+    def hls_path(self) -> str | None:
+        if self.stream_format != "m3u8":
+            return None
+        return f"/streams/{self.stream_id}/hls/radio.m3u8"
+
+    def mp3_path(self) -> str | None:
+        if self.stream_format != "mp3":
+            return None
+        return f"/streams/{self.stream_id}/stream.mp3"
 
     def iter_mp3_stream(self) -> Mp3ClientIterator:
         return self._mp3_stream.iter_client()
@@ -132,20 +184,22 @@ class RadioPlayer:
                 time.sleep(5)
                 continue
 
-            tracks = scan_audio_files(self.settings.audio_dir)
+            tracks = self._selected_tracks()
             with self._lock:
                 self.state.queue_size = len(tracks)
 
             if not tracks:
-                self._set_error(f"No audio files found in {self.settings.audio_dir}")
+                self._set_error("No selected audio files")
                 time.sleep(5)
                 continue
 
             self._set_error(None)
-            if self.settings.mode == "shuffle":
+            if self.config.mode == "shuffle":
                 random.shuffle(tracks)
 
-            self._encoder = self._start_encoder()
+            if self.stream_format == "m3u8":
+                self._encoder = self._start_hls_encoder()
+
             try:
                 for track in tracks:
                     if self._stop_event.is_set():
@@ -162,27 +216,41 @@ class RadioPlayer:
             self.state.running = False
             self.state.current_track = None
 
+    def _selected_tracks(self) -> list[Path]:
+        tracks = []
+        for relative_path in self.config.selected_files:
+            path = (self.config.library_dir / relative_path).resolve()
+            try:
+                path.relative_to(self.config.library_dir)
+            except ValueError:
+                continue
+            if path.is_file():
+                tracks.append(path)
+        return tracks
+
     def _play_track(self, track: Path) -> None:
         self._skip_event.clear()
         with self._lock:
             self.state.current_track = str(track)
 
-        LOGGER.info("Playing %s", track)
+        LOGGER.info("[%s] Playing %s", self.stream_id, track)
         self._decoder = self._start_decoder(track)
 
         try:
             assert self._decoder.stdout is not None
-            assert self._encoder is not None
-            assert self._encoder.stdin is not None
 
             while not self._stop_event.is_set() and not self._skip_event.is_set():
                 chunk = self._decoder.stdout.read(PCM_CHUNK_SIZE)
                 if not chunk:
                     break
                 try:
-                    self._encoder.stdin.write(chunk)
-                    self._encoder.stdin.flush()
-                    self._mp3_stream.write_pcm(chunk)
+                    if self.stream_format == "m3u8":
+                        assert self._encoder is not None
+                        assert self._encoder.stdin is not None
+                        self._encoder.stdin.write(chunk)
+                        self._encoder.stdin.flush()
+                    elif self.stream_format == "mp3":
+                        self._mp3_stream.write_pcm(chunk)
                 except BrokenPipeError:
                     self._set_error("FFmpeg encoder pipe closed")
                     break
@@ -199,8 +267,11 @@ class RadioPlayer:
                 self.state.tracks_played += 1
 
     def _start_decoder(self, track: Path) -> subprocess.Popen[bytes]:
-        command = self._build_decoder_command(track)
-        return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return subprocess.Popen(
+            self._build_decoder_command(track),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _build_decoder_command(self, track: Path) -> list[str]:
         return [
@@ -223,9 +294,12 @@ class RadioPlayer:
             "pipe:1",
         ]
 
-    def _start_encoder(self) -> subprocess.Popen[bytes]:
-        command = self._build_encoder_command()
-        return subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    def _start_hls_encoder(self) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            self._build_encoder_command(),
+            stdin=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _build_encoder_command(self) -> list[str]:
         return [
@@ -259,18 +333,18 @@ class RadioPlayer:
             "-hls_flags",
             "delete_segments+omit_endlist",
             "-hls_segment_filename",
-            str(self.settings.segment_pattern),
-            str(self.settings.playlist_path),
+            str(self.segment_pattern),
+            str(self.playlist_path),
         ]
 
     def _cleanup_hls_files(self) -> None:
-        for path in self.settings.hls_dir.glob("*"):
+        for path in self.hls_dir.glob("*"):
             if path.suffix.lower() in {".m3u8", ".ts", ".m4s", ".tmp"}:
                 path.unlink(missing_ok=True)
 
     def _set_error(self, message: str | None) -> None:
         if message:
-            LOGGER.warning(message)
+            LOGGER.warning("[%s] %s", self.stream_id, message)
         with self._lock:
             self.state.last_error = message
 

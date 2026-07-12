@@ -14,19 +14,36 @@ http://<host-ip>:8000/hls/radio.m3u8
 http://<host-ip>:8000/stream.mp3
 ```
 
+Apple TV / IPTV 应用使用的 M3U 播放列表：
+
+```text
+http://<host-ip>:8000/playlist.m3u
+```
+
 Web 控制台：
 
 ```text
 http://<host-ip>:8001/
 ```
 
+多流地址示例：
+
+```text
+http://<host-ip>:8000/streams/default/hls/radio.m3u8
+http://<host-ip>:8000/streams/default-mp3/stream.mp3
+```
+
 ## 当前能力
 
 - 扫描 `audio/` 目录下的常见音频文件。
+- 支持多个独立流，每个流可选择 `m3u8` 或 `mp3` 输出。
 - 支持循环播放和随机播放。
+- 支持全局扫描音频库，并在 Web 控制台按复选框选择每个流的音频源。
+- 支持将流配置和已选音频持久化到 `config/radio.json`。
 - 使用 FFmpeg 解码不同音频格式，并统一编码为 AAC HLS。
 - 暴露 HLS 静态文件。
 - 暴露 MP3 HTTP 直流，默认地址 `/stream.mp3`。
+- 暴露 M3U 播放列表，默认地址 `/playlist.m3u`。
 - 暴露 Web 控制台，默认端口 `8001`。
 - Web 控制台支持修改扫描目录，新目录必须已经存在且服务进程可读。
 - Web 控制台支持在顺序循环和随机播放之间切换。
@@ -221,6 +238,12 @@ MP3 HTTP 直流：
 curl -I http://localhost:8000/stream.mp3
 ```
 
+M3U 播放列表：
+
+```bash
+curl http://localhost:8000/playlist.m3u
+```
+
 跳过当前曲目：
 
 ```bash
@@ -239,6 +262,13 @@ Web 控制台切换随机播放：
 curl -X POST http://localhost:8001/api/mode \
   -H "Content-Type: application/json" \
   -d '{"mode":"shuffle"}'
+```
+
+多流管理 API：
+
+```bash
+curl http://localhost:8001/api/library
+curl http://localhost:8001/api/streams
 ```
 
 ## 播放客户端

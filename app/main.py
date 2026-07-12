@@ -9,6 +9,8 @@ import threading
 from .player import RadioPlayer
 from .server import create_server
 from .settings import SettingsOverrides, load_settings
+from .config_store import ConfigStore
+from .stream_manager import StreamManager
 from .web_server import create_web_server
 
 
@@ -24,6 +26,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--audio-dir", help="Directory containing local audio files.")
     parser.add_argument("--public-dir", help="Directory served over HTTP.")
     parser.add_argument("--hls-dir", help="Directory where HLS files are written.")
+    parser.add_argument("--config-path", help="Path to persistent radio JSON config.")
     parser.add_argument("--host", help="HTTP bind host, default: 0.0.0.0.")
     parser.add_argument("--port", type=int, help="HTTP bind port, default: 8000.")
     parser.add_argument("--web-port", type=int, help="Web control port, default: 8001.")
@@ -40,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
             audio_dir=args.audio_dir,
             public_dir=args.public_dir,
             hls_dir=args.hls_dir,
+            config_path=args.config_path,
             host=args.host,
             port=args.port,
             web_port=args.web_port,
@@ -47,20 +51,20 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg_bin=args.ffmpeg_bin,
         )
     )
-    player = RadioPlayer(settings)
-    hls_httpd = create_server(settings, player)
-    web_httpd = create_web_server(settings, player)
+    manager = StreamManager(settings, ConfigStore(settings.config_path, settings))
+    hls_httpd = create_server(settings, manager)
+    web_httpd = create_web_server(settings, manager)
 
     def handle_signal(signum: int, _frame: object) -> None:
         logging.getLogger("musicradio").info("Received signal %s", signum)
-        player.stop()
+        manager.stop()
         threading.Thread(target=hls_httpd.shutdown, daemon=True).start()
         threading.Thread(target=web_httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    player.start()
+    manager.start()
     logging.getLogger("musicradio").info(
         "Serving HLS at http://%s:%s/hls/radio.m3u8; audio_dir=%s",
         settings.host,
@@ -83,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         web_httpd.shutdown()
         web_thread.join(timeout=5)
         web_httpd.server_close()
-        player.stop()
+        manager.stop()
 
     return 0
 

@@ -7,17 +7,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .player import RadioPlayer
 from .settings import Settings
+from .stream_manager import StreamManager
 
 
 LOGGER = logging.getLogger("musicradio.server")
 
 
 class RadioRequestHandler(SimpleHTTPRequestHandler):
-    player: RadioPlayer
+    manager: StreamManager
+    settings: Settings
     extensions_map = {
         **SimpleHTTPRequestHandler.extensions_map,
+        ".m3u": "audio/x-mpegurl",
         ".m3u8": "application/vnd.apple.mpegurl",
         ".ts": "video/MP2T",
     }
@@ -28,25 +30,38 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/status":
-            self._send_json(self.player.snapshot())
+            self._send_json(self.manager.status())
+            return
+        if path == "/playlist.m3u":
+            self._send_m3u_playlist()
             return
         if path == "/stream.mp3":
-            self._send_mp3_stream()
+            stream_id = self.manager.compatible_stream_id("mp3")
+            self._send_mp3_stream(stream_id or "default-mp3")
             return
-        if path == "/":
-            self.path = "/hls/radio.m3u8"
+        if path.startswith("/streams/") and path.endswith("/stream.mp3"):
+            stream_id = path.split("/")[2]
+            self._send_mp3_stream(stream_id)
+            return
+        if (
+            path == "/"
+            or path == "/hls/radio.m3u8"
+            or path == "/streams/default/hls/radio.m3u8"
+            or path.startswith("/hls/segment_")
+        ):
+            self.path = self._compatible_hls_path(path)
         else:
             self.path = path
         super().do_GET()
 
     def do_POST(self) -> None:
-        if self.path == "/api/skip":
-            self.player.skip()
+        path = urlparse(self.path).path
+        if path == "/api/skip":
+            self.manager.skip()
             self._send_json({"ok": True})
             return
-        if self.path == "/api/rescan":
-            self.player.rescan()
-            self._send_json({"ok": True})
+        if path == "/api/rescan":
+            self._send_json(self.manager.rescan_library())
             return
         self.send_error(404)
 
@@ -66,7 +81,7 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         LOGGER.info("%s - %s", self.address_string(), format % args)
 
-    def _send_json(self, payload: dict[str, object]) -> None:
+    def _send_json(self, payload: dict[str, object] | list[dict[str, object]]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -74,7 +89,21 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_mp3_stream(self) -> None:
+    def _send_m3u_playlist(self) -> None:
+        body = build_m3u_playlist(self.manager.playlist_entries(self._hostname(), self.settings.port)).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/x-mpegurl; charset=utf-8")
+        self.send_header("Content-Disposition", 'inline; filename="musicradio.m3u"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_mp3_stream(self, stream_id: str) -> None:
+        client = self.manager.iter_mp3_stream(stream_id)
+        if client is None:
+            self.send_error(404)
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Connection", "close")
@@ -82,7 +111,6 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("icy-name", "MusicRadio")
         self.end_headers()
 
-        client = self.player.iter_mp3_stream()
         try:
             for chunk in client:
                 self.wfile.write(chunk)
@@ -92,14 +120,36 @@ class RadioRequestHandler(SimpleHTTPRequestHandler):
         finally:
             client.close()
 
+    def _hostname(self) -> str:
+        host_header = self.headers.get("Host", "")
+        return host_header.split(":", 1)[0] or "localhost"
 
-def create_server(settings: Settings, player: RadioPlayer) -> ThreadingHTTPServer:
+    def _compatible_hls_path(self, path: str) -> str:
+        stream_id = self.manager.compatible_stream_id("m3u8")
+        filename = "radio.m3u8" if path in {"/", "/hls/radio.m3u8"} else Path(path).name
+        if not stream_id or stream_id == "default":
+            return f"/hls/{filename}"
+        return f"/streams/{stream_id}/hls/{filename}"
+
+
+def build_m3u_playlist(entries: list[tuple[str, str]]) -> str:
+    lines = ["#EXTM3U"]
+    for name, url in entries:
+        safe_name = name.replace('"', "'")
+        lines.append(f'#EXTINF:-1 tvg-name="{safe_name}" group-title="Radio",{safe_name}')
+        lines.append(url)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def create_server(settings: Settings, manager: StreamManager) -> ThreadingHTTPServer:
     settings.public_dir.mkdir(parents=True, exist_ok=True)
 
     class BoundRadioRequestHandler(RadioRequestHandler):
         pass
 
-    BoundRadioRequestHandler.player = player
+    BoundRadioRequestHandler.manager = manager
+    BoundRadioRequestHandler.settings = settings
 
     def handler(*args: Any, **kwargs: Any) -> BoundRadioRequestHandler:
         return BoundRadioRequestHandler(*args, public_dir=settings.public_dir, **kwargs)
@@ -107,8 +157,8 @@ def create_server(settings: Settings, player: RadioPlayer) -> ThreadingHTTPServe
     return ThreadingHTTPServer((settings.host, settings.port), handler)
 
 
-def run_server(settings: Settings, player: RadioPlayer) -> None:
-    httpd = create_server(settings, player)
+def run_server(settings: Settings, manager: StreamManager) -> None:
+    httpd = create_server(settings, manager)
     LOGGER.info("Serving HLS at http://%s:%s/hls/radio.m3u8", settings.host, settings.port)
     try:
         httpd.serve_forever()

@@ -4,5 +4,7 @@ __pycache__/
 .pytest_cache/
 public/hls/*
 !public/hls/.gitkeep
+public/streams/
 audio/*
 !audio/.gitkeep
+config/*.json
