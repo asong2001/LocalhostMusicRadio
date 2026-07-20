@@ -73,36 +73,74 @@ MusicRadio/
 
 ## Docker 运行
 
-把音频文件放到：
+本项目可以直接构建成发布镜像。容器内固定使用这些目录：
 
 ```text
-MusicRadio/audio/
+/radio/audio   音乐目录，只读挂载
+/radio/public  HLS/M3U 运行输出，建议持久化
+/radio/config  Web 配置和多流配置，必须持久化
 ```
 
-启动：
+本地构建镜像：
 
 ```bash
+./scripts/docker-build.sh localhost-music-radio:latest
+```
+
+直接运行：
+
+```bash
+docker run -d \
+  --name music-radio \
+  --restart unless-stopped \
+  -p 8000:8000 \
+  -p 8001:8001 \
+  -v /mnt/music:/radio/audio:ro \
+  -v musicradio-public:/radio/public \
+  -v musicradio-config:/radio/config \
+  localhost-music-radio:latest
+```
+
+使用 Compose 部署：
+
+```bash
+cp .env.example .env
+# 修改 .env 里的 RADIO_AUDIO_HOST_DIR
 docker compose up -d --build
 ```
 
-也可以指定任意宿主机音频目录：
+如果使用已经发布到镜像仓库的镜像，不需要源码构建：
 
 ```bash
-./scripts/start-docker.sh /mnt/music
+cp .env.example .env
+# 修改 .env 里的 MUSICRADIO_IMAGE 和 RADIO_AUDIO_HOST_DIR
+docker compose -f docker-compose.release.yml up -d
 ```
 
-传入的音频目录必须已经存在且当前用户可读。脚本不会自动创建 `/mnt/music` 这类系统目录。
-
-或者手动指定：
+指定任意宿主机音频目录：
 
 ```bash
 RADIO_AUDIO_HOST_DIR=/mnt/music docker compose up -d --build
 ```
 
+传入的音频目录必须已经存在且 Docker 服务可读。配置会保存在 `./config/radio.json`，升级容器时不会丢失电台列表和勾选结果。
+
 查看状态：
 
 ```bash
 docker compose logs -f
+```
+
+发布到镜像仓库：
+
+```bash
+./scripts/docker-publish.sh ghcr.io/asong2001/localhost-music-radio:latest
+```
+
+发布前需要先登录对应仓库，例如：
+
+```bash
+docker login ghcr.io
 ```
 
 如果构建时报类似下面的错误：
@@ -171,7 +209,7 @@ python3 -m app.main --audio-dir /mnt/music --web-port 8001
 如果脚本没有执行权限，先运行：
 
 ```bash
-chmod +x scripts/start.sh scripts/start-docker.sh
+chmod +x scripts/start.sh scripts/start-docker.sh scripts/docker-build.sh scripts/docker-publish.sh
 ```
 
 ## Windows 原生运行
@@ -196,6 +234,7 @@ chmod +x scripts/start.sh scripts/start-docker.sh
 RADIO_AUDIO_DIR=/radio/audio
 RADIO_PUBLIC_DIR=/radio/public
 RADIO_HLS_DIR=/radio/public/hls
+RADIO_CONFIG_PATH=/radio/config/radio.json
 RADIO_HOST=0.0.0.0
 RADIO_PORT=8000
 RADIO_WEB_PORT=8001
@@ -285,6 +324,7 @@ iPhone Safari 通常可以直接播放 HLS。桌面 Chrome 如果要网页播放
 
 - HLS 会有几秒延迟，这是协议特性。
 - HLS 默认使用 3 秒 TS 分片，并返回 `video/MP2T`，以兼容更挑剔的硬件播放器。
-- Docker 部署时，`audio/` 默认只读挂载进容器。
-- 防火墙需要放行 `8000` 端口。
-- 服务启动后如果没有音频文件，会等待并定期重新扫描。
+- Docker 部署时，音乐目录建议只读挂载进容器。
+- Docker 部署必须持久化 `/radio/config`，否则容器重建后 Web 里的电台配置会丢失。
+- 防火墙需要放行 `8000` 和 `8001` 端口。
+- 服务启动后不会自动扫描全库，需要在 Web 控制台点击“重新扫描”。

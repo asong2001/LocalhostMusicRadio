@@ -1,7 +1,6 @@
 services:
   radio:
-    build: .
-    image: localhost-music-radio:latest
+    image: ${MUSICRADIO_IMAGE:-ghcr.io/asong2001/localhost-music-radio:latest}
     container_name: music-radio
     restart: unless-stopped
     ports:

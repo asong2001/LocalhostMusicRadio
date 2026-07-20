@@ -27,7 +27,7 @@ if [[ ! -r "$AUDIO_DIR" ]]; then
   exit 2
 fi
 
-mkdir -p "$PROJECT_DIR/public/hls"
+mkdir -p "$PROJECT_DIR/public/hls" "$PROJECT_DIR/config"
 
 if command -v realpath >/dev/null 2>&1; then
   AUDIO_DIR="$(realpath "$AUDIO_DIR")"

@@ -1,7 +1,10 @@
+.git/
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
 audio/
-public/hls/
+config/
+public/
 tests/
+*.log
