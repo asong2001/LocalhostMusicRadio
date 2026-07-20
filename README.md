@@ -2,6 +2,8 @@
 
 MusicRadio 是一个面向 Linux 和 Docker 的本地音乐电台服务。它会读取本地音频目录，把 `flac`、`mp3`、`wav`、`m4a` 等文件连续播放，并实时转码成局域网可访问的 HLS 直播地址。
 
+**这是一个纯vibe coding的项目，使用GPT-.5在Codex上完成。**
+
 目标地址：
 
 ```text
