@@ -1,59 +1,86 @@
 # MusicRadio
 
-MusicRadio 是一个面向 Linux 和 Docker 的本地音乐电台服务。它会读取本地音频目录，把 `flac`、`mp3`、`wav`、`m4a` 等文件连续播放，并实时转码成局域网可访问的 HLS 直播地址。
+MusicRadio 是一个面向 Linux 和 Docker 的本地音乐电台服务。它扫描本地音乐目录，把 `flac`、`mp3`、`wav`、`m4a` 等音频转成局域网可访问的 HLS、MP3 和 M3U 电台流，并提供 Web 控制台管理多个电台。
 
-**这是一个纯vibe coding的项目，使用GPT-.5在Codex上完成。**
+**这是一个纯 vibe coding 的项目，使用 GPT-5 在 Codex 上完成。**
 
-目标地址：
-
-```text
-http://<host-ip>:8000/hls/radio.m3u8
-```
-
-兼容 MP3 HTTP 直流：
+常用地址：
 
 ```text
-http://<host-ip>:8000/stream.mp3
+Web 控制台: http://<host-ip>:8001/
+M3U 播放列表: http://<host-ip>:8000/playlist.m3u
+HLS 直播流: http://<host-ip>:8000/hls/radio.m3u8
+MP3 直播流: http://<host-ip>:8000/stream.mp3
 ```
 
-Apple TV / IPTV 应用使用的 M3U 播放列表：
+## Quick Start
 
-```text
-http://<host-ip>:8000/playlist.m3u
+在一台新的 Linux 机器上部署：
+
+```bash
+sudo apt update
+sudo apt install -y git docker.io docker-compose-plugin
+git clone https://github.com/asong2001/LocalhostMusicRadio.git
+cd LocalhostMusicRadio
+cp .env.example .env
 ```
 
-Web 控制台：
+编辑 `.env`，把音乐目录改成目标机器上的实际路径：
+
+```bash
+nano .env
+```
+
+例如：
+
+```env
+RADIO_AUDIO_HOST_DIR=/mnt/music
+RADIO_PORT=8000
+RADIO_WEB_PORT=8001
+```
+
+确认音乐目录存在且 Docker 可读：
+
+```bash
+ls /mnt/music
+```
+
+启动服务：
+
+```bash
+docker compose up -d --build
+```
+
+打开 Web 控制台：
 
 ```text
 http://<host-ip>:8001/
 ```
 
-多流地址示例：
+首次使用时，在 Web 控制台点击“重新扫描”，然后创建或选择电台、勾选音频、保存并重启。
+
+常用播放地址：
 
 ```text
-http://<host-ip>:8000/streams/default/hls/radio.m3u8
-http://<host-ip>:8000/streams/default-mp3/stream.mp3
+http://<host-ip>:8000/playlist.m3u
+http://<host-ip>:8000/hls/radio.m3u8
+http://<host-ip>:8000/stream.mp3
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
 ```
 
 ## 当前能力
 
-- 扫描 `audio/` 目录下的常见音频文件。
-- 支持多个独立流，每个流可选择 `m3u8` 或 `mp3` 输出。
-- 支持循环播放和随机播放。
-- 支持全局扫描音频库，并在 Web 控制台按复选框选择每个流的音频源。
-- 支持将流配置和已选音频持久化到 `config/radio.json`。
-- 使用 FFmpeg 解码不同音频格式，并统一编码为 AAC HLS。
-- 暴露 HLS 静态文件。
-- 暴露 MP3 HTTP 直流，默认地址 `/stream.mp3`。
-- 暴露 M3U 播放列表，默认地址 `/playlist.m3u`。
-- 暴露 Web 控制台，默认端口 `8001`。
-- Web 控制台支持修改扫描目录，新目录必须已经存在且服务进程可读。
-- Web 控制台支持在顺序循环和随机播放之间切换。
-- 提供简单 API：
-  - `GET /api/status`
-  - `POST /api/skip`
-  - `POST /api/rescan`
-- 提供 Dockerfile 和 Docker Compose 配置。
+- 多电台管理：每个电台可独立选择 HLS 或 MP3 输出。
+- 音频源勾选：全局扫描音乐库，按文件夹折叠展示，给每个电台选择不同音频。
+- 播放模式：支持顺序循环和随机播放。
+- 播放列表：自动生成 Apple TV / IPTV 可用的 `/playlist.m3u`。
+- 持久化配置：电台、扫描目录和勾选结果保存到 `config/radio.json`。
+- Docker 部署：提供 Dockerfile、Compose 和 release compose 模板。
 
 ## 目录结构
 
